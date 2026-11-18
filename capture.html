@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drawer capture</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 1.2rem; max-width: 560px; }
+  h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+  label { display: block; font-weight: 600; margin: 1rem 0 .35rem; }
+  select, input[type=text] { width: 100%; font-size: 1.05rem; padding: .6rem; box-sizing: border-box; }
+  input[type=file] { font-size: 1rem; margin-top: .35rem; }
+  button { width: 100%; font-size: 1.15rem; padding: .8rem; margin-top: 1.2rem; }
+  #status { margin-top: 1rem; font-size: 1rem; }
+  #preview { max-width: 100%; margin-top: 1rem; display: none; }
+  .hint { color: #555; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>📦 Drawer capture</h1>
+<p class="hint">Snap a drawer, say where it is, add a hint if sizes/counts matter
+(e.g. “left bin is M5 bolts, ~30”). The photo is filed for AI — you don't
+need to browse anything here.</p>
+<form id="form">
+  <label for="location">Location</label>
+  <select id="location" name="location_id"></select>
+  <label for="photo">Photo</label>
+  <input type="file" id="photo" name="photo" accept="image/*" capture="environment" required>
+  <img id="preview" alt="">
+  <label for="hint">Hint (optional)</label>
+  <input type="text" id="hint" name="hint" placeholder="left bin is M5 bolts, ~30">
+  <button type="submit">Upload photo</button>
+</form>
+<p id="status"></p>
+<script>
+async function loadLocations() {
+  const res = await fetch('/locations');
+  const locs = await res.json();
+  const sel = document.getElementById('location');
+  sel.innerHTML = locs.map(l => `<option value="${l.id}">${l.path}</option>`).join('');
+}
+document.getElementById('photo').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const img = document.getElementById('preview');
+  img.src = URL.createObjectURL(f);
+  img.style.display = 'block';
+});
+document.getElementById('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const status = document.getElementById('status');
+  status.textContent = 'Uploading…';
+  const res = await fetch('/upload', { method: 'POST', body: new FormData(e.target) });
+  const data = await res.json();
+  status.textContent = res.ok
+    ? `Saved as photo #${data.photo_id} — ${data.location}. Awaiting categorization.`
+    : `Upload failed: ${data.error || res.status}`;
+});
+loadLocations();
+</script>
+</body>
+</html>

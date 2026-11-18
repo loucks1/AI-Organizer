@@ -1,0 +1,5 @@
+inventory.db
+photos/*
+!photos/.gitkeep
+__pycache__/
+*.pyc

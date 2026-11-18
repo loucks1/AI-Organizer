@@ -48,7 +48,16 @@ python3 categorize.py --photo-id <id> --json categorization.json --categorizer m
 # --categorizer: muse | grok | gemini | gpt | claude | ...
 ```
 
-`categorize.py` validates the JSON (bbox values in 0–1, confidence in
-0–1), inserts one row per item, and marks the photo `categorized`.
-Re-running categorization for a photo replaces its items — the original
-photo file is never modified.
+or over HTTP against a running server (same payload, plus an optional
+`"categorizer"` field in the body):
+
+```sh
+curl -X POST localhost:8765/photos/<id>/categorization -d @categorization.json
+# -> {"photo_id": <id>, "filed": <count>, "status": "categorized", ...}
+```
+
+Both routes share one validation/filing implementation: the JSON is
+validated (bbox values in 0–1, confidence in 0–1), one row per item is
+inserted, and the photo is marked `categorized`. Re-running
+categorization for a photo replaces its items — the original photo file
+is never modified.

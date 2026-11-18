@@ -20,10 +20,10 @@ an empty DB from `schema.sql` on startup.
 |---|---|
 | `schema.sql` / `inventory.db` | SQLite store: `locations`, `photos`, `items` (items carry a bounding box as fractions of the photo, so the item can be shown highlighted) |
 | `capture.html` | Mobile-friendly capture page: pick location, snap photo, optional hint, upload |
-| `server.py` | Stdlib-only HTTP server (port 8765, `127.0.0.1` unless `INVENTORY_HOST` is set): serves the capture page, accepts uploads into the photos directory, lists pending photos |
+| `server.py` | Stdlib-only HTTP server (port 8765, `127.0.0.1` unless `INVENTORY_HOST` is set): serves the capture page, accepts uploads into the photos directory, lists pending photos; also `POST /locations` and `POST /photos/<id>/categorization` so a deployment can be populated over HTTP alone |
 | `inventory_config.py` | Shared paths (`INVENTORY_DB`, `INVENTORY_PHOTOS`) and schema bootstrap |
 | `mcp_server.py` | Stdlib-only MCP server over stdio: `search_inventory`, `list_location`, `get_item`, `check_parts`, `list_pending_photos` |
-| `categorize.py` | Files a categorization JSON (from Muse, Grok, or any vision API) into the DB |
+| `categorize.py` | Files a categorization JSON (from Muse, Grok, or any vision API) into the DB; its validation/filing function is shared with the server's categorization endpoint |
 | `search.py` | Quick CLI search, for smoke tests |
 | `CATEGORIZE.md` | The exact JSON contract + prompt any categorizer must return |
 
@@ -66,6 +66,18 @@ File a categorization (after Muse / an API returns the JSON):
 ```sh
 python3 categorize.py --photo-id 1 --json categorization.json --categorizer muse
 ```
+
+Or against a running server, over HTTP — same contract, same validation:
+
+```sh
+curl -X POST localhost:8765/locations -d '{"name": "Storage Room"}'
+curl -X POST localhost:8765/photos/1/categorization -d @categorization.json
+```
+
+`POST /locations` takes `{"name": ..., "parent_id": ...}` (`parent_id`
+optional; a duplicate path is a 409). The categorization endpoint takes
+the CATEGORIZE.md JSON plus an optional `"categorizer"` field and replies
+with how many items were filed.
 
 Environment (defaults are a local checkout; the Docker image overrides them):
 

@@ -3,6 +3,10 @@
 
 Serves capture.html, accepts photo uploads into the photos directory,
 records them in the SQLite DB as status='pending' for categorization.
+Also accepts the writes an AI categorizer needs so a deployment can be
+populated over HTTP alone: POST /locations creates a location, and
+POST /photos/<id>/categorization files a categorization (the JSON
+contract in CATEGORIZE.md, same validation as categorize.py).
 Run:  python3 server.py        # http://127.0.0.1:8765
 Env:  INVENTORY_HOST (default 127.0.0.1), INVENTORY_PORT (default 8765),
       INVENTORY_DB (default inventory.db), INVENTORY_PHOTOS (default photos/)
@@ -16,6 +20,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+from categorize import CategorizationError, file_categorization
 from inventory_config import connect, db_path, ensure_db, listen_host, listen_port, photos_dir
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -110,10 +115,85 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def _read_json(self):
+        """Parse the request body as JSON. On failure, sends a 400 and
+        returns None."""
+        length = int(self.headers.get("Content-Length", 0))
+        if length <= 0:
+            self._send_json({"error": "expected a JSON body"}, 400)
+            return None
+        try:
+            return json.loads(self.rfile.read(length))
+        except (ValueError, UnicodeDecodeError):
+            self._send_json({"error": "body is not valid JSON"}, 400)
+            return None
+
     def do_POST(self):
-        if urlparse(self.path).path != "/upload":
+        path = urlparse(self.path).path
+        if path == "/upload":
+            self._handle_upload()
+        elif path == "/locations":
+            self._handle_create_location()
+        elif path.startswith("/photos/") and path.endswith("/categorization"):
+            self._handle_categorization(path)
+        else:
+            self.send_error(404)
+
+    def _handle_create_location(self):
+        data = self._read_json()
+        if data is None:
+            return
+        name = (data.get("name") or "").strip()
+        if not name:
+            self._send_json({"error": "name is required"}, 400)
+            return
+        if "/" in name:
+            self._send_json({"error": "name must not contain '/'"}, 400)
+            return
+        parent_id = data.get("parent_id")
+        with db() as conn:
+            if parent_id is None:
+                path = name
+            else:
+                parent = conn.execute("SELECT path FROM locations WHERE id = ?",
+                                      (parent_id,)).fetchone()
+                if parent is None:
+                    self._send_json({"error": f"no location with id {parent_id}"}, 400)
+                    return
+                path = f"{parent['path']} / {name}"
+            try:
+                cur = conn.execute(
+                    "INSERT INTO locations (name, parent_id, path) VALUES (?, ?, ?)",
+                    (name, parent_id, path))
+            except sqlite3.IntegrityError:
+                self._send_json({"error": f"location already exists: {path}"}, 409)
+                return
+            location_id = cur.lastrowid
+        self._send_json({"id": location_id, "name": name,
+                         "parent_id": parent_id, "path": path}, 201)
+
+    def _handle_categorization(self, path):
+        try:
+            photo_id = int(path[len("/photos/"):-len("/categorization")].strip("/"))
+        except ValueError:
             self.send_error(404)
             return
+        data = self._read_json()
+        if data is None:
+            return
+        categorizer = data.get("categorizer") or "muse"
+        with db() as conn:
+            try:
+                filed = file_categorization(conn, photo_id, data.get("items"),
+                                            categorizer)
+            except CategorizationError as e:
+                status = 404 if str(e).startswith("no photo with id") else 400
+                self._send_json({"error": str(e)}, status)
+                return
+        self._send_json({"photo_id": photo_id, "filed": filed,
+                         "status": "categorized", "categorizer": categorizer})
+
+    def _handle_upload(self):
         length = int(self.headers.get("Content-Length", 0))
         ctype = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in ctype or length <= 0:

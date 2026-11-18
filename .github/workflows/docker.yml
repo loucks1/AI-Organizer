@@ -46,3 +46,40 @@ jobs:
           }, locs
           assert len(locs) == 3
           PY
+
+      - name: Exercise write endpoints
+        run: |
+          set -euo pipefail
+          docker run -d --name ai-organizer-ci2 -p 8765:8765 -v ai-organizer-ci2:/data ai-organizer:ci
+          trap 'docker rm -f ai-organizer-ci2 >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/healthz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          base=http://127.0.0.1:8765
+          curl -fsS -X POST "$base/locations" -d '{"name":"Smoke"}' > /tmp/loc.json
+          python3 - <<'PY'
+          import json
+          loc = json.load(open("/tmp/loc.json"))
+          assert loc["path"] == "Smoke", loc
+          open("/tmp/loc_id", "w").write(str(loc["id"]))
+          PY
+          printf 'smoke' > /tmp/smoke.jpg
+          curl -fsS -F "photo=@/tmp/smoke.jpg" -F "location_id=$(cat /tmp/loc_id)" \
+            "$base/upload" > /tmp/up.json
+          python3 - <<'PY'
+          import json
+          up = json.load(open("/tmp/up.json"))
+          assert up["status"] == "pending" and up["location"] == "Smoke", up
+          open("/tmp/photo_id", "w").write(str(up["photo_id"]))
+          PY
+          curl -fsS -X POST "$base/photos/$(cat /tmp/photo_id)/categorization" \
+            -d '{"items":[{"name":"smoke widget","bbox":[0,0,0.5,0.5],"confidence":0.5}]}' \
+            > /tmp/cat.json
+          python3 - <<'PY'
+          import json
+          cat = json.load(open("/tmp/cat.json"))
+          assert cat["filed"] == 1 and cat["status"] == "categorized", cat
+          PY

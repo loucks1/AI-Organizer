@@ -11,20 +11,18 @@ tools/list, tools/call. Tools:
 
 Run:  python3 mcp_server.py        (reads JSON-RPC lines on stdin)
 Env:  INVENTORY_DB (default inventory.db next to this file)
+      Photo filenames in results are files under INVENTORY_PHOTOS
+      (default photos/ next to this file). This process does not open them.
+The database is created from schema.sql when it is missing or is missing a table.
 """
 import json
-import os
-import sqlite3
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DB = os.environ.get("INVENTORY_DB", os.path.join(HERE, "inventory.db"))
+from inventory_config import connect, ensure_db
 
 
 def db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return connect()
 
 
 def item_dict(r):
@@ -161,6 +159,7 @@ def handle(msg):
 
 
 def main():
+    ensure_db()
     for line in sys.stdin:
         line = line.strip()
         if not line:

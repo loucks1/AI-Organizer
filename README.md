@@ -11,8 +11,8 @@ model level; loose bulk as type + rough quantity; unidentifiable items
 flagged, never invented). First real entries filed locally: 37 items
 across 3 photos in 2 locations. Muse is the categorizer for now (no API
 key). Published to the lab as `loucks1/AI-Organizer`; the live database
-and photos stay local (gitignored) — a fresh clone builds an empty DB
-from `schema.sql`.
+and photos stay local (gitignored) — a fresh clone or container builds
+an empty DB from `schema.sql` on startup.
 
 ## Layout
 
@@ -20,7 +20,8 @@ from `schema.sql`.
 |---|---|
 | `schema.sql` / `inventory.db` | SQLite store: `locations`, `photos`, `items` (items carry a bounding box as fractions of the photo, so the item can be shown highlighted) |
 | `capture.html` | Mobile-friendly capture page: pick location, snap photo, optional hint, upload |
-| `server.py` | Stdlib-only HTTP server (port 8765): serves the capture page, accepts uploads into `photos/`, lists pending photos |
+| `server.py` | Stdlib-only HTTP server (port 8765, `127.0.0.1` unless `INVENTORY_HOST` is set): serves the capture page, accepts uploads into the photos directory, lists pending photos |
+| `inventory_config.py` | Shared paths (`INVENTORY_DB`, `INVENTORY_PHOTOS`) and schema bootstrap |
 | `mcp_server.py` | Stdlib-only MCP server over stdio: `search_inventory`, `list_location`, `get_item`, `check_parts`, `list_pending_photos` |
 | `categorize.py` | Files a categorization JSON (from Muse, Grok, or any vision API) into the DB |
 | `search.py` | Quick CLI search, for smoke tests |
@@ -51,11 +52,14 @@ from `schema.sql`.
 
 ```sh
 cd <repo clone>
-sqlite3 inventory.db < schema.sql        # creates DB + starter locations
-python3 server.py                        # capture page at http://localhost:8765
+python3 server.py                        # capture page at http://127.0.0.1:8765
 python3 search.py "torx"                 # CLI search
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | python3 mcp_server.py
 ```
+
+The first run creates `inventory.db` from `schema.sql` when the file is
+missing or is missing a table (starter locations, no items). A database
+that already has the tables is not modified. The `sqlite3` CLI is not required.
 
 File a categorization (after Muse / an API returns the JSON):
 
@@ -63,13 +67,55 @@ File a categorization (after Muse / an API returns the JSON):
 python3 categorize.py --photo-id 1 --json categorization.json --categorizer muse
 ```
 
-Environment: `INVENTORY_DB` overrides the DB path (default
-`inventory.db` next to the scripts); `INVENTORY_PORT` overrides 8765.
+Environment (defaults are a local checkout; the Docker image overrides them):
+
+| Variable | Local default | In the image |
+|---|---|---|
+| `INVENTORY_HOST` | `127.0.0.1` | `0.0.0.0` |
+| `INVENTORY_PORT` | `8765` | `8765` |
+| `INVENTORY_DB` | `inventory.db` next to the scripts | `/data/inventory.db` |
+| `INVENTORY_PHOTOS` | `photos/` next to the scripts | `/data/photos` |
+
+## Run in Docker
+
+The image builds from this repo's root, including when Dockhand builds
+straight from the public git URL. It is stdlib Python on `python:3.13-slim`,
+runs as uid 1000, listens on `0.0.0.0:8765`, and keeps the database and
+photos under `/data` so one volume is the whole backup. On a fresh volume
+the server loads `schema.sql` (the three starter locations, no items).
+An existing database is left alone.
+
+```yaml
+services:
+  ai-organizer:
+    build:
+      context: https://github.com/loucks1/AI-Organizer.git#main
+    ports:
+      - "8765:8765"
+    volumes:
+      - organizer-data:/data
+    restart: unless-stopped
+
+volumes:
+  organizer-data:
+```
+
+A named volume picks up uid 1000 from the image. A bind mount has to be
+writable by that user. There is no login on the capture page; reach it
+through the Docker host (LAN or Tailscale) the same way as the other stacks.
+
+The MCP server stays on stdio inside the container:
+
+```sh
+docker exec -i <container> python3 mcp_server.py
+```
 
 ## Not done / open
 
-1. **Hosting** — Docker on Jason's home network, reachable over Tailscale,
-   same pattern as the Neurio stack. Not started; prototype runs locally.
+1. **Hosting** — the image is in this repo. Compose for the home-lab
+   Dockhand host lives in `loucks1/DockhandStacks` and builds from the
+   public git URL (see above). Tailscale exposure is the host's job,
+   same pattern as the Neurio stack.
 2. **Provider choice** — Muse-first (no key) is the current setup. A
    Grok/xAI API key (or other vision API) only matters if he wants
    automatic, instant categorization; the JSON contract doesn't change.

@@ -7,15 +7,13 @@ Validates the contract in CATEGORIZE.md (bbox 0–1, confidence 0–1), inserts
 one item row per entry, marks the photo 'categorized'. Re-running for a
 photo replaces its items; the original photo file is never touched.
 Env: INVENTORY_DB (default inventory.db next to this file)
+The database is created from schema.sql when it is missing or is missing a table.
 """
 import argparse
 import json
-import os
-import sqlite3
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DB = os.environ.get("INVENTORY_DB", os.path.join(HERE, "inventory.db"))
+from inventory_config import connect, ensure_db
 
 
 def fail(msg):
@@ -36,8 +34,8 @@ def main():
     if not isinstance(items, list):
         fail("JSON must have an 'items' array (see CATEGORIZE.md)")
 
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
+    ensure_db()
+    conn = connect()
     photo = conn.execute("SELECT id, location_id FROM photos WHERE id = ?",
                          (args.photo_id,)).fetchone()
     if photo is None:

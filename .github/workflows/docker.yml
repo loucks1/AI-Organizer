@@ -1,0 +1,48 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build -t ai-organizer:ci .
+
+      - name: Serve and curl
+        run: |
+          set -euo pipefail
+          docker run -d --name ai-organizer-ci -p 8765:8765 -v ai-organizer-ci:/data ai-organizer:ci
+          trap 'docker rm -f ai-organizer-ci >/dev/null 2>&1 || true' EXIT
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/healthz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
+          curl -fsS http://127.0.0.1:8765/healthz
+          echo
+          curl -fsS http://127.0.0.1:8765/ -o /dev/null
+          python3 - <<'PY'
+          import json, urllib.request
+          locs = json.load(urllib.request.urlopen("http://127.0.0.1:8765/locations"))
+          paths = {row["path"] for row in locs}
+          assert paths == {
+              "Garage",
+              "Garage / Parts cabinet",
+              "Garage / Parts cabinet / Drawer 3",
+          }, locs
+          assert len(locs) == 3
+          PY

@@ -83,3 +83,10 @@ jobs:
           cat = json.load(open("/tmp/cat.json"))
           assert cat["filed"] == 1 and cat["status"] == "categorized", cat
           PY
+          curl -fsS -F "photo=@/tmp/smoke.jpg" -F "location_path=Smoke / Drawer" \
+            "$base/upload" > /tmp/up2.json
+          python3 - <<'PY'
+          import json
+          up = json.load(open("/tmp/up2.json"))
+          assert up["location"] == "Smoke / Drawer" and up["status"] == "pending", up
+          PY

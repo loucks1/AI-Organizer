@@ -24,6 +24,11 @@ need to browse anything here.</p>
 <form id="form">
   <label for="location">Location</label>
   <select id="location" name="location_id"></select>
+  <label for="location_path">New location (optional)</label>
+  <input type="text" id="location_path" name="location_path" placeholder="Kitchen / junk drawer">
+  <p class="hint">Not in the list? Type it as Room / bin-or-drawer and it
+  will be created for this photo. A filled-in new location wins over the
+  dropdown.</p>
   <label for="photo">Photo</label>
   <input type="file" id="photo" name="photo" accept="image/*" capture="environment" required>
   <img id="preview" alt="">
@@ -52,9 +57,15 @@ document.getElementById('form').addEventListener('submit', async e => {
   status.textContent = 'Uploading…';
   const res = await fetch('/upload', { method: 'POST', body: new FormData(e.target) });
   const data = await res.json();
-  status.textContent = res.ok
-    ? `Saved as photo #${data.photo_id} — ${data.location}. Awaiting categorization.`
-    : `Upload failed: ${data.error || res.status}`;
+  if (res.ok) {
+    status.textContent = `Saved as photo #${data.photo_id} — ${data.location}. Awaiting categorization.`;
+    document.getElementById('location_path').value = '';
+    await loadLocations();
+    const sel = document.getElementById('location');
+    for (const o of sel.options) if (o.text === data.location) sel.value = o.value;
+  } else {
+    status.textContent = `Upload failed: ${data.error || res.status}`;
+  }
 });
 loadLocations();
 </script>

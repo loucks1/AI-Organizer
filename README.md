@@ -19,7 +19,7 @@ an empty DB from `schema.sql` on startup.
 | File | What it is |
 |---|---|
 | `schema.sql` / `inventory.db` | SQLite store: `locations`, `photos`, `items` (items carry a bounding box as fractions of the photo, so the item can be shown highlighted) |
-| `capture.html` | Mobile-friendly capture page: pick location, snap photo, optional hint, upload |
+| `capture.html` | Mobile-friendly capture page: pick a location — or type a new one as `Room / bin-or-drawer` and it's created on upload — snap photo, optional hint, upload |
 | `server.py` | Stdlib-only HTTP server (port 8765, `127.0.0.1` unless `INVENTORY_HOST` is set): serves the capture page, accepts uploads into the photos directory, lists pending photos; also `POST /locations` and `POST /photos/<id>/categorization` so a deployment can be populated over HTTP alone |
 | `inventory_config.py` | Shared paths (`INVENTORY_DB`, `INVENTORY_PHOTOS`) and schema bootstrap |
 | `mcp_server.py` | Stdlib-only MCP server over stdio: `search_inventory`, `list_location`, `get_item`, `check_parts`, `list_pending_photos` |

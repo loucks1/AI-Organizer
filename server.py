@@ -6,7 +6,9 @@ records them in the SQLite DB as status='pending' for categorization.
 Also accepts the writes an AI categorizer needs so a deployment can be
 populated over HTTP alone: POST /locations creates a location, and
 POST /photos/<id>/categorization files a categorization (the JSON
-contract in CATEGORIZE.md, same validation as categorize.py).
+contract in CATEGORIZE.md, same validation as categorize.py). An upload
+may name its location as location_path text ("Room / bin-or-drawer")
+instead of a location_id; missing tiers are created on the spot.
 Run:  python3 server.py        # http://127.0.0.1:8765
 Env:  INVENTORY_HOST (default 127.0.0.1), INVENTORY_PORT (default 8765),
       INVENTORY_DB (default inventory.db), INVENTORY_PHOTOS (default photos/)
@@ -28,6 +30,36 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def db():
     return connect()
+
+
+def ensure_location_path(conn, raw):
+    """Resolve 'Tier 1 / Tier 2' text to a location, creating tiers.
+
+    Locations are two-tier by convention (a Home Assistant area, then a
+    bin/drawer/furniture piece), so the text must be one or two non-empty
+    segments. Returns (location_id, path); raises ValueError with a
+    user-facing message otherwise. Runs in the caller's transaction.
+    """
+    segments = [s.strip() for s in (raw or "").split("/")]
+    segments = [s for s in segments if s]
+    if not segments or len(segments) > 2:
+        raise ValueError("location must be 'Room' or 'Room / bin-or-drawer'")
+    parent_id = None
+    path = None
+    location_id = None
+    for seg in segments:
+        path = seg if parent_id is None else f"{path} / {seg}"
+        row = conn.execute("SELECT id FROM locations WHERE path = ?",
+                           (path,)).fetchone()
+        if row is None:
+            cur = conn.execute(
+                "INSERT INTO locations (name, parent_id, path) VALUES (?, ?, ?)",
+                (seg, parent_id, path))
+            location_id = cur.lastrowid
+        else:
+            location_id = row["id"]
+        parent_id = location_id
+    return location_id, path
 
 
 def parse_multipart(body, boundary):
@@ -209,21 +241,36 @@ class Handler(BaseHTTPRequestHandler):
         if ext not in (".jpg", ".jpeg", ".png", ".heic", ".webp"):
             ext = ".jpg"
         stored = f"{uuid.uuid4().hex[:12]}{ext}"
+        stored_path = os.path.join(photos_dir(), stored)
         os.makedirs(photos_dir(), exist_ok=True)
-        with open(os.path.join(photos_dir(), stored), "wb") as f:
+        with open(stored_path, "wb") as f:
             f.write(data)
-        location_id = int(parts.get("location_id", 3))
         hint = parts.get("hint", "") or None
-        with db() as conn:
-            cur = conn.execute(
-                "INSERT INTO photos (location_id, filename, hint, status) "
-                "VALUES (?, ?, ?, 'pending')", (location_id, stored, hint))
-            photo_id = cur.lastrowid
-            loc = conn.execute("SELECT path FROM locations WHERE id = ?",
-                               (location_id,)).fetchone()
+        location_path = (parts.get("location_path") or "").strip()
+        try:
+            with db() as conn:
+                if location_path:
+                    location_id, path = ensure_location_path(conn, location_path)
+                else:
+                    try:
+                        location_id = int(parts.get("location_id", 3))
+                    except (TypeError, ValueError):
+                        raise ValueError("location_id must be a number")
+                    loc = conn.execute("SELECT path FROM locations WHERE id = ?",
+                                       (location_id,)).fetchone()
+                    if loc is None:
+                        raise ValueError(f"no location with id {location_id}")
+                    path = loc["path"]
+                cur = conn.execute(
+                    "INSERT INTO photos (location_id, filename, hint, status) "
+                    "VALUES (?, ?, ?, 'pending')", (location_id, stored, hint))
+                photo_id = cur.lastrowid
+        except ValueError as e:
+            os.remove(stored_path)  # don't orphan the file on a bad request
+            self._send_json({"error": str(e)}, 400)
+            return
         self._send_json({"photo_id": photo_id, "filename": stored,
-                         "location": loc["path"] if loc else None,
-                         "status": "pending"})
+                         "location": path, "status": "pending"})
 
 
 if __name__ == "__main__":

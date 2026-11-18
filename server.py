@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Drawer inventory — capture server (Python stdlib only).
 
-Serves capture.html, accepts photo uploads into photos/, records them in
-the SQLite DB as status='pending' for categorization.
-Run:  python3 server.py        # http://localhost:8765
-Env:  INVENTORY_DB (default inventory.db), INVENTORY_PORT (default 8765)
+Serves capture.html, accepts photo uploads into the photos directory,
+records them in the SQLite DB as status='pending' for categorization.
+Run:  python3 server.py        # http://127.0.0.1:8765
+Env:  INVENTORY_HOST (default 127.0.0.1), INVENTORY_PORT (default 8765),
+      INVENTORY_DB (default inventory.db), INVENTORY_PHOTOS (default photos/)
+The database is created from schema.sql on startup when it is missing
+or is missing a table. An existing database is left as it is.
 """
 import json
 import os
@@ -13,16 +16,13 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+from inventory_config import connect, db_path, ensure_db, listen_host, listen_port, photos_dir
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB = os.environ.get("INVENTORY_DB", os.path.join(HERE, "inventory.db"))
-PORT = int(os.environ.get("INVENTORY_PORT", "8765"))
-PHOTOS_DIR = os.path.join(HERE, "photos")
 
 
 def db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return connect()
 
 
 def parse_multipart(body, boundary):
@@ -67,7 +67,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/":
+        if parsed.path == "/healthz":
+            try:
+                with db() as conn:
+                    conn.execute("SELECT COUNT(*) FROM locations").fetchone()
+            except sqlite3.Error:
+                self._send_json({"ok": False}, 503)
+                return
+            self._send_json({"ok": True})
+        elif parsed.path == "/":
             with open(os.path.join(HERE, "capture.html"), "rb") as f:
                 data = f.read()
             self.send_response(200)
@@ -88,7 +96,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json([dict(r) for r in rows])
         elif parsed.path.startswith("/photo/"):
             filename = os.path.basename(parsed.path[len("/photo/"):])
-            path = os.path.join(PHOTOS_DIR, filename)
+            path = os.path.join(photos_dir(), filename)
             if not os.path.isfile(path):
                 self.send_error(404, "no such photo")
                 return
@@ -121,8 +129,8 @@ class Handler(BaseHTTPRequestHandler):
         if ext not in (".jpg", ".jpeg", ".png", ".heic", ".webp"):
             ext = ".jpg"
         stored = f"{uuid.uuid4().hex[:12]}{ext}"
-        os.makedirs(PHOTOS_DIR, exist_ok=True)
-        with open(os.path.join(PHOTOS_DIR, stored), "wb") as f:
+        os.makedirs(photos_dir(), exist_ok=True)
+        with open(os.path.join(photos_dir(), stored), "wb") as f:
             f.write(data)
         location_id = int(parts.get("location_id", 3))
         hint = parts.get("hint", "") or None
@@ -139,5 +147,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"drawer-inventory capture server on http://localhost:{PORT} (db: {DB})")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    ensure_db()
+    host, port = listen_host(), listen_port()
+    print(f"drawer-inventory capture server on http://{host}:{port} "
+          f"(db: {db_path()}, photos: {photos_dir()})", flush=True)
+    ThreadingHTTPServer((host, port), Handler).serve_forever()

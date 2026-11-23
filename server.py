@@ -9,6 +9,8 @@ POST /photos/<id>/categorization files a categorization (the JSON
 contract in CATEGORIZE.md, same validation as categorize.py). An upload
 may name its location as location_path text ("Room / bin-or-drawer")
 instead of a location_id; missing tiers are created on the spot.
+POST /locations/<id>/merge folds one location into another (the fix for
+a place captured under two spellings).
 Run:  python3 server.py        # http://127.0.0.1:8765
 Env:  INVENTORY_HOST (default 127.0.0.1), INVENTORY_PORT (default 8765),
       INVENTORY_DB (default inventory.db), INVENTORY_PHOTOS (default photos/)
@@ -60,6 +62,73 @@ def ensure_location_path(conn, raw):
             location_id = row["id"]
         parent_id = location_id
     return location_id, path
+
+
+def merge_location(conn, source_id, target_id):
+    """Merge one location into another, in the caller's transaction.
+
+    Photos and items filed under the source move to the target. Each
+    child of the source is merged into a same-named child of the target
+    when one exists, and reparented (with its subtree's paths rewritten)
+    when it doesn't. The source row is deleted. Returns a summary dict.
+    Raises ValueError with a user-facing message for unknown ids, a
+    self-merge, or a merge between a location and its own subtree —
+    the tree must stay a tree.
+    """
+    src = conn.execute("SELECT id, name, parent_id, path FROM locations "
+                       "WHERE id = ?", (source_id,)).fetchone()
+    tgt = conn.execute("SELECT id, name, parent_id, path FROM locations "
+                       "WHERE id = ?", (target_id,)).fetchone()
+    if src is None:
+        raise ValueError(f"no location with id {source_id}")
+    if tgt is None:
+        raise ValueError(f"no location with id {target_id}")
+    if source_id == target_id:
+        raise ValueError("cannot merge a location into itself")
+    if tgt["path"].startswith(src["path"] + " / "):
+        raise ValueError("cannot merge a location into its own subtree")
+    if src["path"].startswith(tgt["path"] + " / "):
+        raise ValueError("cannot merge a location into its own ancestor")
+
+    summary = {"merged": src["path"], "into": tgt["path"],
+               "photos_moved": 0, "items_moved": 0,
+               "children_merged": [], "children_moved": []}
+    summary["photos_moved"] = conn.execute(
+        "UPDATE photos SET location_id = ? WHERE location_id = ?",
+        (target_id, source_id)).rowcount
+    summary["items_moved"] = conn.execute(
+        "UPDATE items SET location_id = ? WHERE location_id = ?",
+        (target_id, source_id)).rowcount
+
+    children = conn.execute(
+        "SELECT id, name, path FROM locations WHERE parent_id = ? "
+        "ORDER BY name", (source_id,)).fetchall()
+    for child in children:
+        sibling = conn.execute(
+            "SELECT id FROM locations WHERE parent_id = ? AND name = ?",
+            (target_id, child["name"])).fetchone()
+        if sibling is not None:
+            sub = merge_location(conn, child["id"], sibling["id"])
+            summary["photos_moved"] += sub["photos_moved"]
+            summary["items_moved"] += sub["items_moved"]
+            summary["children_merged"].append(sub["merged"])
+            summary["children_merged"] += sub["children_merged"]
+            summary["children_moved"] += sub["children_moved"]
+        else:
+            old_prefix = child["path"]
+            new_prefix = f"{tgt['path']} / {child['name']}"
+            subtree = conn.execute(
+                "SELECT id, path FROM locations WHERE path = ? OR path LIKE ?",
+                (old_prefix, old_prefix + " / %")).fetchall()
+            for loc in subtree:
+                conn.execute(
+                    "UPDATE locations SET path = ? WHERE id = ?",
+                    (new_prefix + loc["path"][len(old_prefix):], loc["id"]))
+            conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?",
+                         (target_id, child["id"]))
+            summary["children_moved"].append(new_prefix)
+    conn.execute("DELETE FROM locations WHERE id = ?", (source_id,))
+    return summary
 
 
 def parse_multipart(body, boundary):
@@ -166,6 +235,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_upload()
         elif path == "/locations":
             self._handle_create_location()
+        elif path.startswith("/locations/") and path.endswith("/merge"):
+            self._handle_merge_location(path)
         elif path.startswith("/photos/") and path.endswith("/categorization"):
             self._handle_categorization(path)
         else:
@@ -203,6 +274,28 @@ class Handler(BaseHTTPRequestHandler):
             location_id = cur.lastrowid
         self._send_json({"id": location_id, "name": name,
                          "parent_id": parent_id, "path": path}, 201)
+
+    def _handle_merge_location(self, path):
+        try:
+            source_id = int(path[len("/locations/"):-len("/merge")].strip("/"))
+        except ValueError:
+            self.send_error(404)
+            return
+        data = self._read_json()
+        if data is None:
+            return
+        into_id = data.get("into_id")
+        if not isinstance(into_id, int):
+            self._send_json({"error": "into_id (a location id) is required"}, 400)
+            return
+        try:
+            with db() as conn:
+                summary = merge_location(conn, source_id, into_id)
+        except ValueError as e:
+            status = 404 if str(e) == f"no location with id {source_id}" else 400
+            self._send_json({"error": str(e)}, status)
+            return
+        self._send_json(summary)
 
     def _handle_categorization(self, path):
         try:

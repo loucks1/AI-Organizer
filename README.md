@@ -77,7 +77,11 @@ curl -X POST localhost:8765/photos/1/categorization -d @categorization.json
 `POST /locations` takes `{"name": ..., "parent_id": ...}` (`parent_id`
 optional; a duplicate path is a 409). The categorization endpoint takes
 the CATEGORIZE.md JSON plus an optional `"categorizer"` field and replies
-with how many items were filed.
+with how many items were filed. `POST /locations/<id>/merge` with
+`{"into_id": ...}` folds one location into another — photos and items
+move, same-named children merge recursively, other children are
+reparented — which is the fix for a place captured under two spellings
+(e.g. "Storage room" vs "Storage Room").
 
 Environment (defaults are a local checkout; the Docker image overrides them):
 

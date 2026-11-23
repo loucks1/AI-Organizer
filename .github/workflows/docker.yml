@@ -90,3 +90,16 @@ jobs:
           up = json.load(open("/tmp/up2.json"))
           assert up["location"] == "Smoke / Drawer" and up["status"] == "pending", up
           PY
+          curl -fsS -X POST "$base/locations" -d '{"name":"Smoke2"}' > /tmp/loc2.json
+          python3 - <<'PY'
+          import json
+          loc2 = json.load(open("/tmp/loc2.json"))
+          open("/tmp/loc2_id", "w").write(str(loc2["id"]))
+          PY
+          curl -fsS -X POST "$base/locations/$(cat /tmp/loc2_id)/merge" \
+            -d "{\"into_id\": $(cat /tmp/loc_id)}" > /tmp/merge.json
+          python3 - <<'PY'
+          import json
+          m = json.load(open("/tmp/merge.json"))
+          assert m["merged"] == "Smoke2" and m["into"] == "Smoke", m
+          PY

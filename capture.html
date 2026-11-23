@@ -59,6 +59,12 @@ document.getElementById('form').addEventListener('submit', async e => {
   const data = await res.json();
   if (res.ok) {
     status.textContent = `Saved as photo #${data.photo_id} — ${data.location}. Awaiting categorization.`;
+    const photoInput = document.getElementById('photo');
+    photoInput.value = '';
+    const img = document.getElementById('preview');
+    if (img.src) URL.revokeObjectURL(img.src);
+    img.removeAttribute('src');
+    img.style.display = 'none';
     document.getElementById('location_path').value = '';
     await loadLocations();
     const sel = document.getElementById('location');

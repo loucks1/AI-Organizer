@@ -103,3 +103,50 @@ jobs:
           m = json.load(open("/tmp/merge.json"))
           assert m["merged"] == "Smoke2" and m["into"] == "Smoke", m
           PY
+          python3 - <<'PY'
+          import json
+          up = json.load(open("/tmp/up.json"))
+          open("/tmp/photo_file", "w").write(up["filename"])
+          up2 = json.load(open("/tmp/up2.json"))
+          open("/tmp/photo2_id", "w").write(str(up2["photo_id"]))
+          PY
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            "$base/locations/$(cat /tmp/loc_id)")
+          test "$code" = 409
+          curl -fsS -X DELETE "$base/photos/$(cat /tmp/photo_id)" > /tmp/del.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/del.json"))
+          assert d["items_deleted"] == 1 and d["file_removed"] is True, d
+          PY
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "$base/photo/$(cat /tmp/photo_file)")
+          test "$code" = 404
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            "$base/photos/$(cat /tmp/photo_id)")
+          test "$code" = 404
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            "$base/items/999999")
+          test "$code" = 404
+          curl -fsS -X DELETE "$base/photos/$(cat /tmp/photo2_id)" > /tmp/del2.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/del2.json"))
+          assert d["items_deleted"] == 0, d
+          PY
+          curl -fsS "$base/locations" > /tmp/locs.json
+          python3 - <<'PY'
+          import json
+          locs = json.load(open("/tmp/locs.json"))
+          child = next(r for r in locs if r["path"] == "Smoke / Drawer")
+          open("/tmp/child_id", "w").write(str(child["id"]))
+          PY
+          curl -fsS -X DELETE "$base/locations/$(cat /tmp/child_id)" > /tmp/del3.json
+          curl -fsS -X DELETE "$base/locations/$(cat /tmp/loc_id)" > /tmp/del4.json
+          python3 - <<'PY'
+          import json
+          d3 = json.load(open("/tmp/del3.json"))
+          d4 = json.load(open("/tmp/del4.json"))
+          assert d3["path"] == "Smoke / Drawer", d3
+          assert d4["path"] == "Smoke", d4
+          PY

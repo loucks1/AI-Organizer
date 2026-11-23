@@ -20,7 +20,7 @@ an empty DB from `schema.sql` on startup.
 |---|---|
 | `schema.sql` / `inventory.db` | SQLite store: `locations`, `photos`, `items` (items carry a bounding box as fractions of the photo, so the item can be shown highlighted) |
 | `capture.html` | Mobile-friendly capture page: pick a location — or type a new one as `Room / bin-or-drawer` and it's created on upload — snap photo, optional hint, upload |
-| `server.py` | Stdlib-only HTTP server (port 8765, `127.0.0.1` unless `INVENTORY_HOST` is set): serves the capture page, accepts uploads into the photos directory, lists pending photos; also `POST /locations` and `POST /photos/<id>/categorization` so a deployment can be populated over HTTP alone |
+| `server.py` | Stdlib-only HTTP server (port 8765, `127.0.0.1` unless `INVENTORY_HOST` is set): serves the capture page, accepts uploads into the photos directory, lists pending photos; also `POST /locations`, `POST /photos/<id>/categorization`, `POST /locations/<id>/merge`, and `DELETE` endpoints for photos, items, and locations, so a deployment can be populated — and corrected — over HTTP alone |
 | `inventory_config.py` | Shared paths (`INVENTORY_DB`, `INVENTORY_PHOTOS`) and schema bootstrap |
 | `mcp_server.py` | Stdlib-only MCP server over stdio: `search_inventory`, `list_location`, `get_item`, `check_parts`, `list_pending_photos` |
 | `categorize.py` | Files a categorization JSON (from Muse, Grok, or any vision API) into the DB; its validation/filing function is shared with the server's categorization endpoint |
@@ -82,6 +82,13 @@ with how many items were filed. `POST /locations/<id>/merge` with
 move, same-named children merge recursively, other children are
 reparented — which is the fix for a place captured under two spellings
 (e.g. "Storage room" vs "Storage Room").
+
+Deletes mirror the writes: `DELETE /photos/<id>` removes a photo, its
+items, and its file (the fix for a duplicate upload); `DELETE
+/items/<id>` removes one item (a miscategorized entry) and leaves the
+photo; `DELETE /locations/<id>` removes a location only while it is
+empty — a location that still has photos, items, or sub-locations is a
+409, never a silent cascade. Unknown ids are a 404.
 
 Environment (defaults are a local checkout; the Docker image overrides them):
 

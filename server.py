@@ -10,7 +10,10 @@ contract in CATEGORIZE.md, same validation as categorize.py). An upload
 may name its location as location_path text ("Room / bin-or-drawer")
 instead of a location_id; missing tiers are created on the spot.
 POST /locations/<id>/merge folds one location into another (the fix for
-a place captured under two spellings).
+a place captured under two spellings). DELETE /photos/<id>,
+DELETE /items/<id>, and DELETE /locations/<id> remove a photo (with its
+items and its file), a single item, or an empty location — the fix for
+a duplicate upload or a miscategorized item.
 Run:  python3 server.py        # http://127.0.0.1:8765
 Env:  INVENTORY_HOST (default 127.0.0.1), INVENTORY_PORT (default 8765),
       INVENTORY_DB (default inventory.db), INVENTORY_PHOTOS (default photos/)
@@ -131,6 +134,66 @@ def merge_location(conn, source_id, target_id):
     return summary
 
 
+class LocationNotEmptyError(ValueError):
+    """A location delete was refused because the location is in use."""
+
+
+def delete_photo(conn, photo_id):
+    """Delete one photo and its items, in the caller's transaction.
+
+    Returns a summary including the filename, so the caller can remove
+    the file once the transaction commits. Raises ValueError for an
+    unknown photo id.
+    """
+    row = conn.execute("SELECT filename FROM photos WHERE id = ?",
+                       (photo_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"no photo with id {photo_id}")
+    items = conn.execute("DELETE FROM items WHERE photo_id = ?",
+                         (photo_id,)).rowcount
+    conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+    return {"photo_id": photo_id, "filename": row["filename"],
+            "items_deleted": items}
+
+
+def delete_item(conn, item_id):
+    """Delete one item, in the caller's transaction. Raises ValueError
+    for an unknown item id."""
+    row = conn.execute("SELECT photo_id FROM items WHERE id = ?",
+                       (item_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"no item with id {item_id}")
+    conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+    return {"item_id": item_id, "photo_id": row["photo_id"]}
+
+
+def delete_location(conn, location_id):
+    """Delete an empty location, in the caller's transaction.
+
+    Refuses — LocationNotEmptyError — while the location still has
+    photos, items, or sub-locations; delete or merge those first, so a
+    delete can never cascade silently. Raises ValueError for an
+    unknown location id.
+    """
+    row = conn.execute("SELECT path FROM locations WHERE id = ?",
+                       (location_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"no location with id {location_id}")
+    photos = conn.execute("SELECT COUNT(*) AS n FROM photos "
+                          "WHERE location_id = ?", (location_id,)).fetchone()["n"]
+    items = conn.execute("SELECT COUNT(*) AS n FROM items "
+                         "WHERE location_id = ?", (location_id,)).fetchone()["n"]
+    children = conn.execute("SELECT COUNT(*) AS n FROM locations "
+                            "WHERE parent_id = ?", (location_id,)).fetchone()["n"]
+    if photos or items or children:
+        raise LocationNotEmptyError(
+            f"location is not empty: {row['path']} has {photos} photo(s), "
+            f"{items} item(s), {children} sub-location(s) — "
+            "delete or merge those first")
+    conn.execute("DELETE FROM locations WHERE id = ?", (location_id,))
+    return {"location_id": location_id, "path": row["path"]}
+
+
 def parse_multipart(body, boundary):
     """Minimal multipart/form-data parser. Returns {field: value} where a
     file field is (filename, bytes) and a text field is str."""
@@ -241,6 +304,72 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_categorization(path)
         else:
             self.send_error(404)
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if path.startswith("/photos/"):
+            self._handle_delete_photo(path)
+        elif path.startswith("/items/"):
+            self._handle_delete_item(path)
+        elif path.startswith("/locations/"):
+            self._handle_delete_location(path)
+        else:
+            self.send_error(404)
+
+    def _handle_delete_photo(self, path):
+        try:
+            photo_id = int(path[len("/photos/"):].strip("/"))
+        except ValueError:
+            self.send_error(404)
+            return
+        try:
+            with db() as conn:
+                summary = delete_photo(conn, photo_id)
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 404)
+            return
+        # The row is committed; now remove the file. A file that is
+        # already gone is fine — the DB is the record.
+        file_path = os.path.join(photos_dir(), summary["filename"])
+        try:
+            os.remove(file_path)
+            summary["file_removed"] = True
+        except FileNotFoundError:
+            summary["file_removed"] = False
+        except OSError:
+            summary["file_removed"] = False
+        self._send_json(summary)
+
+    def _handle_delete_item(self, path):
+        try:
+            item_id = int(path[len("/items/"):].strip("/"))
+        except ValueError:
+            self.send_error(404)
+            return
+        try:
+            with db() as conn:
+                summary = delete_item(conn, item_id)
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 404)
+            return
+        self._send_json(summary)
+
+    def _handle_delete_location(self, path):
+        try:
+            location_id = int(path[len("/locations/"):].strip("/"))
+        except ValueError:
+            self.send_error(404)
+            return
+        try:
+            with db() as conn:
+                summary = delete_location(conn, location_id)
+        except LocationNotEmptyError as e:
+            self._send_json({"error": str(e)}, 409)
+            return
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 404)
+            return
+        self._send_json(summary)
 
     def _handle_create_location(self):
         data = self._read_json()
